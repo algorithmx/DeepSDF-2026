@@ -1,0 +1,13 @@
+torch
+torchvision
+plyfile
+scikit-image
+trimesh
+py7zr
+pykdtree
+pyvista
+numpy
+scipy
+matplotlib
+tqdm
+tensorboardX

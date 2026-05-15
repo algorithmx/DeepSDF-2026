@@ -1,5 +1,10 @@
 # DeepSDF
 
+DeepSDF is of historical importance in Implicit Neural Representations (INR). Proper conduct of experiments on various datasets beyond ShapeNet is not only to show respect, but also necessary to reassess the value of the work from modern perspectives. This fork is a cross-section of a continuously evolving effort to understand every detail of the DeepSDF work, as you can see the from the CHANGELOG below. 
+
+I am glad to answer any questions of any form. Feel free to open an issue for discussions!
+
+
 ## CHANGELOG: May 2026
 
 ### C++ → Pure-Python Preprocessing Pipeline
@@ -64,6 +69,26 @@
 37. `specs.json` now supports nested `"Code"` object with keys: `CodeLength`, `CodeRegularization`, `CodeRegularizationLambda`, `CodeBound`, `CodeInitStdDev`, `unmask-at-epoch`, `SceneCategories` — flattened automatically by `workspace.py`.
 38. `specs.json` `"NetworkSpecs"` — `xyz_dim` field for configurable input dimension (3 = raw coordinates, 51 = NeRF positional encoding).
 39. `specs.json` — `NumProducers`/`WorkersPerProducer` for async data loading; `PosDecayThreshold`/`PosDecayExp` for adaptive SDF sampling.
+
+### Claude-Code-Autopilot Experiment Runner
+40. `run.sh` — Loop-based driver that invokes `claude -p --dangerously-skip-permissions` to follow `CLAUDE.md`+`PLAN.md` until `COMPLETE` contains "DONE". Supports resumption across multiple iterations, retry on non-zero exit.
+41. `CLAUDE.md` — Minimal agent instructions for the autopilot (used by `run.sh`).
+42. `AGENTS.md` — Conda environment context (`ml_env`) for AI coding agents.
+43. `PLAN.md` — Full 6-stage execution plan for the RF (electromagnetic geometry) dataset experiment with progress tracking.
+44. `COMPLETE` — Single-word status file (`DONE` when plan is finished) used by `run.sh` for entry/exit decisions.
+
+### RF Dataset Preparation & Experiment
+45. `rf_prepare.py` — Standalone pipeline that discovers flat `.obj` files, organizes them into DeepSDF `models/<id>/mesh.obj` layout, and generates SDF samples (and optionally surface samples) in a single pass via `preprocess_data.py`. Supports `--resume`, multi-thread parallelism, and configurable SDF flags.
+46. `notes/` — Stage-by-stage experiment reports (6 stages + substages) documenting the end-to-end RF dataset run: environment setup, data preparation, training, reconstruction, full-scale training, and evaluation (Chamfer/EMD metrics across 5 experiments).
+47. `MIGRATION_GUIDE.md` — Copy-based upgrade guide from original C++ DeepSDF to the pure-Python evolved version.
+48. `verify_migration.sh` — Shell script to verify the migration by checking required files and directories.
+49. `requirements_clean.txt` — Pruned dependency list for the `ml_env` conda environment.
+
+### Incomplete / Future Work
+- Known-shape (training set) reconstruction for final report — deferred.
+- Shape interpolation examples across latent codes — partial (rf_128_16 only), Stage 2d interpolation skipped.
+- Shape completion from partial depth observations (optional, per paper Section 6.3) — not implemented.
+- Cross-category interpolation analysis for one-hot experiment (`rf_256_32_onehot`) — not performed.
 
 ---
 

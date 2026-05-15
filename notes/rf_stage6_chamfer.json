@@ -1,0 +1,61 @@
+{
+  "timestamp": "2026-05-11T20:40:07.787711",
+  "checkpoint": "2000",
+  "experiments": {
+    "rf_128_16": {
+      "experiment": "rf_128_16",
+      "checkpoint": "2000",
+      "num_shapes": 320,
+      "failed": 0,
+      "chamfer_mean": 9859.151079275936,
+      "chamfer_median": 122.07574532777677,
+      "chamfer_std": 28530.51814960216,
+      "chamfer_min": 10.984713633127523,
+      "chamfer_max": 281647.48043099773
+    },
+    "rf_256_16": {
+      "experiment": "rf_256_16",
+      "checkpoint": "2000",
+      "num_shapes": 320,
+      "failed": 0,
+      "chamfer_mean": 7728.028893912633,
+      "chamfer_median": 113.88897104131264,
+      "chamfer_std": 21030.287596309347,
+      "chamfer_min": 9.886113664403931,
+      "chamfer_max": 199285.33719722106
+    },
+    "rf_256_32_nerf": {
+      "experiment": "rf_256_32_nerf",
+      "checkpoint": "2000",
+      "num_shapes": 320,
+      "failed": 0,
+      "chamfer_mean": 167390.54352575663,
+      "chamfer_median": 85.83844610992178,
+      "chamfer_std": 876051.6096249307,
+      "chamfer_min": 10.054536197953711,
+      "chamfer_max": 6245462.3388053635
+    },
+    "rf_256_32_nerf_768": {
+      "experiment": "rf_256_32_nerf_768",
+      "checkpoint": "2000",
+      "num_shapes": 320,
+      "failed": 0,
+      "chamfer_mean": 166308.41082085948,
+      "chamfer_median": 87.72450391672083,
+      "chamfer_std": 882827.3478015623,
+      "chamfer_min": 9.838930154985704,
+      "chamfer_max": 6238960.443954375
+    },
+    "rf_256_32_onehot": {
+      "experiment": "rf_256_32_onehot",
+      "checkpoint": "2000",
+      "num_shapes": 320,
+      "failed": 0,
+      "chamfer_mean": 8236.107137447214,
+      "chamfer_median": 100.45578591896549,
+      "chamfer_std": 54956.83381281294,
+      "chamfer_min": 11.482281993081436,
+      "chamfer_max": 687965.3750335133
+    }
+  }
+}
