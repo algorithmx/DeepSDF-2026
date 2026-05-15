@@ -19,13 +19,15 @@ class Decoder(nn.Module):
         xyz_in_all=None,
         use_tanh=False,
         latent_dropout=False,
+        xyz_dim=3,
     ):
         super(Decoder, self).__init__()
 
         def make_sequence():
             return []
 
-        dims = [latent_size + 3] + dims + [1]
+        dims = [latent_size + xyz_dim] + dims + [1]
+        self.xyz_dim = xyz_dim
 
         self.num_layers = len(dims)
         self.norm_layers = norm_layers
@@ -43,13 +45,15 @@ class Decoder(nn.Module):
             else:
                 out_dim = dims[layer + 1]
                 if self.xyz_in_all and layer != self.num_layers - 2:
-                    out_dim -= 3
+                    out_dim -= self.xyz_dim
 
             if weight_norm and layer in self.norm_layers:
                 setattr(
                     self,
                     "lin" + str(layer),
-                    nn.utils.weight_norm(nn.Linear(dims[layer], out_dim)),
+                    nn.utils.parametrizations.weight_norm(
+                        nn.Linear(dims[layer], out_dim)
+                    ),
                 )
             else:
                 setattr(self, "lin" + str(layer), nn.Linear(dims[layer], out_dim))
@@ -70,12 +74,12 @@ class Decoder(nn.Module):
         self.dropout = dropout
         self.th = nn.Tanh()
 
-    # input: N x (L+3)
+    # input: N x (L+xyz_dim)
     def forward(self, input):
-        xyz = input[:, -3:]
+        xyz = input[:, -self.xyz_dim:]
 
-        if input.shape[1] > 3 and self.latent_dropout:
-            latent_vecs = input[:, :-3]
+        if input.shape[1] > self.xyz_dim and self.latent_dropout:
+            latent_vecs = input[:, :-self.xyz_dim]
             latent_vecs = F.dropout(latent_vecs, p=0.2, training=self.training)
             x = torch.cat([latent_vecs, xyz], 1)
         else:

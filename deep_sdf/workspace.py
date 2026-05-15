@@ -31,7 +31,35 @@ def load_experiment_specifications(experiment_directory):
             + '"specs.json"'.format(experiment_directory)
         )
 
-    return json.load(open(filename))
+    specs = json.load(open(filename))
+
+    # Two-version specs.json support: flatten code-related fields from
+    # a nested "Code" object back to the top level.
+    if "Code" in specs:
+        code_block = specs.pop("Code")
+        if not isinstance(code_block, dict):
+            raise TypeError(
+                "The 'Code' field in specs.json must be an object, got {}".format(
+                    type(code_block).__name__
+                )
+            )
+        _code_keys = (
+            "CodeLength",
+            "CodeRegularization",
+            "CodeRegularizationLambda",
+            "CodeBound",
+            "CodeInitStdDev",
+            "unmask-at-epoch",
+            "SceneCategories",
+        )
+        for key in _code_keys:
+            if key in code_block:
+                specs[key] = code_block[key]
+
+    if "unmask-at-epoch" not in specs:
+        specs["unmask-at-epoch"] = 0
+
+    return specs
 
 
 def load_model_parameters(experiment_directory, checkpoint, decoder):
@@ -68,6 +96,9 @@ def load_decoder(
 ):
 
     decoder = build_decoder(experiment_directory, experiment_specs)
+
+    import deep_sdf.utils
+    deep_sdf.utils.set_xyz_dim(experiment_specs["NetworkSpecs"].get("xyz_dim", 3))
 
     if data_parallel:
         decoder = torch.nn.DataParallel(decoder)

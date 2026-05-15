@@ -6,10 +6,20 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
 import subprocess
+import sys
+import threading
 
 import deep_sdf
 import deep_sdf.workspace as ws
+from deep_sdf.utils import resolve_ml_env_python
+
+# Python interpreter to use when spawning the preprocessor scripts.
+# Using the conda ml_env interpreter avoids bus-errors that occur when the
+# ambient Python (e.g. base conda) is missing compiled extensions or uses
+# incompatible native libraries (trimesh, scipy, numpy with native routines).
+_SCRIPT_PYTHON = resolve_ml_env_python()
 
 
 def filter_classes_glob(patterns, classes):
@@ -45,17 +55,38 @@ def filter_classes(patterns, classes):
         return filter_classes_glob(patterns, classes)
 
 
-def process_mesh(mesh_filepath, target_filepath, executable, additional_args):
-    logging.info(mesh_filepath + " --> " + target_filepath)
-    command = [executable, "-m", mesh_filepath, "-o", target_filepath] + additional_args
+def process_mesh(mesh_filepath, target_filepath, executable, additional_args, quiet=False):
+    if not quiet:
+        logging.info(mesh_filepath + " --> " + target_filepath)
 
-    subproc = subprocess.Popen(command, stdout=subprocess.DEVNULL)
-    subproc.wait()
+    # Python scripts need a dedicated interpreter prefix.
+    # We use _SCRIPT_PYTHON (the ml_env conda interpreter) so that native
+    # libraries (trimesh, scipy, numpy AVX routines) are loaded from the
+    # correct environment, preventing SIGBUS crashes on mismatched builds.
+    if executable.endswith(".py"):
+        command = [_SCRIPT_PYTHON, executable, "-m", mesh_filepath, "-o", target_filepath] + additional_args
+    else:
+        command = [executable, "-m", mesh_filepath, "-o", target_filepath] + additional_args
+
+    if quiet:
+        command.append("--quiet")
+
+    subproc = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    _, stderr_data = subproc.communicate()
+    if stderr_data:
+        msg = stderr_data.decode(errors="replace").strip()
+        if msg:
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
+    if subproc.returncode != 0:
+        raise RuntimeError(
+            f"Preprocessor exited with code {subproc.returncode}: {mesh_filepath}"
+        )
 
 
-def append_data_source_map(data_dir, name, source):
-
-    data_source_map_filename = ws.get_data_source_map_filename(data_dir)
+def append_data_source_map(data_source_map_filename, name, source):
 
     print("data sources stored to " + data_source_map_filename)
 
@@ -107,6 +138,27 @@ if __name__ == "__main__":
         help="The name to use for the data source. If unspecified, it defaults to the "
         + "directory name.",
     )
+
+    ds_group = arg_parser.add_mutually_exclusive_group()
+    ds_group.add_argument(
+        "--datasource_map",
+        dest="datasource_map",
+        default=None,
+        help=(
+            "Path to the datasource map JSON file. Defaults to <data_dir>/.datasources.json. "
+            "Useful when you want full CLI control over bookkeeping paths."
+        ),
+    )
+    ds_group.add_argument(
+        "--no_datasource_map",
+        dest="no_datasource_map",
+        default=False,
+        action="store_true",
+        help=(
+            "Disable reading/writing the datasource map entirely. "
+            "This bypasses the name->source consistency check (use with care)."
+        ),
+    )
     arg_parser.add_argument(
         "--split",
         dest="split_filename",
@@ -142,7 +194,61 @@ if __name__ == "__main__":
         help="If set, the script will produce mesh surface samples for evaluation. "
         + "Otherwise, the script will produce SDF samples for training.",
     )
-
+    arg_parser.add_argument(
+        "--preprocess-args",
+        dest="preprocess_args",
+        default="",
+        help="Extra arguments forwarded verbatim to the preprocessor script "
+        "(PreprocessMesh.py or SampleMeshSurface.py). "
+        "Example: --preprocess-args '--anisotropic-bias --on-surface-ratio 0.15'",
+    )
+    arg_parser.add_argument(
+        "--uniform-ratio",
+        dest="uniform_ratio",
+        type=float,
+        default=None,
+        help="Fraction of non-triplet samples allocated to uniform random sampling "
+        "(forwarded to PreprocessMesh.py). Default: 0.06 (original DeepSDF split).",
+    )
+    arg_parser.add_argument(
+        "--bounding-cube",
+        dest="bounding_cube",
+        type=float,
+        nargs=3,
+        default=None,
+        metavar=("A", "B", "C"),
+        help="Per-axis extents for uniform sampling box (forwarded to PreprocessMesh.py). "
+        "Default: 1.0 1.0 1.0 (i.e. [-0.5, 0.5]^3).",
+    )
+    arg_parser.add_argument(
+        "--sdf-method",
+        dest="sdf_method",
+        type=str,
+        default=None,
+        choices=["knn", "igl", "raycast"],
+        help="SDF computation backend (forwarded to PreprocessMesh.py). Default: igl.",
+    )
+    arg_parser.add_argument(
+        "--normal-offset",
+        dest="normal_offset",
+        action="store_true",
+        default=False,
+        help="Offset near-surface samples along surface normal (forwarded to PreprocessMesh.py). Default: off.",
+    )
+    arg_parser.add_argument(
+        "--triplet-epsilon",
+        dest="triplet_epsilon",
+        type=float,
+        default=None,
+        help="Relative offset for on-surface triplets (forwarded to PreprocessMesh.py). Default: 0.02.",
+    )
+    arg_parser.add_argument(
+        "--num-sample",
+        dest="num_sample",
+        type=int,
+        default=None,
+        help="Total SDF samples per mesh (forwarded to PreprocessMesh.py). Default: 500000.",
+    )
     deep_sdf.add_common_args(arg_parser)
 
     args = arg_parser.parse_args()
@@ -153,16 +259,38 @@ if __name__ == "__main__":
 
     deepsdf_dir = os.path.dirname(os.path.abspath(__file__))
     if args.surface_sampling:
-        executable = os.path.join(deepsdf_dir, "bin/SampleVisibleMeshSurface")
+        executable = os.path.join(deepsdf_dir, "bin/SampleMeshSurface.py")
         subdir = ws.surface_samples_subdir
         extension = ".ply"
     else:
-        executable = os.path.join(deepsdf_dir, "bin/PreprocessMesh")
+        executable = os.path.join(deepsdf_dir, "bin/PreprocessMesh.py")
         subdir = ws.sdf_samples_subdir
         extension = ".npz"
 
         if args.test_sampling:
             additional_general_args += ["-t"]
+
+    if args.preprocess_args:
+        import shlex
+        additional_general_args += shlex.split(args.preprocess_args)
+
+    if args.uniform_ratio is not None:
+        additional_general_args += ["--uniform-ratio", str(args.uniform_ratio)]
+
+    if args.bounding_cube is not None:
+        additional_general_args += ["--bounding-cube"] + [str(v) for v in args.bounding_cube]
+
+    if args.sdf_method is not None:
+        additional_general_args += ["--sdf-method", args.sdf_method]
+
+    if args.normal_offset:
+        additional_general_args += ["--normal-offset"]
+
+    if args.triplet_epsilon is not None:
+        additional_general_args += ["--triplet-epsilon", str(args.triplet_epsilon)]
+
+    if args.num_sample is not None:
+        additional_general_args += ["--num_sample", str(args.num_sample)]
 
     with open(args.split_filename, "r") as f:
         split = json.load(f)
@@ -189,7 +317,13 @@ if __name__ == "__main__":
         if not os.path.isdir(normalization_param_dir):
             os.makedirs(normalization_param_dir)
 
-    append_data_source_map(args.data_dir, args.source_name, args.source_dir)
+    if not args.no_datasource_map:
+        datasource_map_filename = (
+            args.datasource_map
+            if args.datasource_map is not None
+            else ws.get_data_source_map_filename(args.data_dir)
+        )
+        append_data_source_map(datasource_map_filename, args.source_name, args.source_dir)
 
     class_directories = split[args.source_name]
 
@@ -248,21 +382,55 @@ if __name__ == "__main__":
             except deep_sdf.data.MultipleMeshFileError:
                 logging.warning("Multiple meshes found for instance " + instance_dir)
 
+    # Progress tracking for quiet mode
+    total_meshes = len(meshes_targets_and_specific_args)
+    # Report ~10 times across the run; for small batches report every mesh.
+    progress_interval = max(1, total_meshes // 10)
+    # Use lists to allow mutation from nested function (nonlocal doesn't work at module level)
+    completed_count = [0]
+    failed_count = [0]
+    progress_lock = threading.Lock()
+
+    def process_mesh_with_progress(mesh_filepath, target_filepath, executable, args_list):
+        try:
+            process_mesh(mesh_filepath, target_filepath, executable, args_list, quiet=args.quiet)
+            success = True
+        except RuntimeError as exc:
+            logging.warning(str(exc))
+            success = False
+        if args.quiet:
+            with progress_lock:
+                if success:
+                    completed_count[0] += 1
+                else:
+                    failed_count[0] += 1
+                done = completed_count[0] + failed_count[0]
+                if done % progress_interval == 0 or done == total_meshes:
+                    sys.stdout.write(
+                        f"\rProgress: {completed_count[0]}/{total_meshes} meshes"
+                        + (f" ({failed_count[0]} failed)" if failed_count[0] else "")
+                    )
+                    sys.stdout.flush()
+
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=int(args.num_threads)
     ) as executor:
-
-        for (
-            mesh_filepath,
-            target_filepath,
-            specific_args,
-        ) in meshes_targets_and_specific_args:
+        futures = [
             executor.submit(
-                process_mesh,
+                process_mesh_with_progress,
                 mesh_filepath,
                 target_filepath,
                 executable,
                 specific_args + additional_general_args,
             )
-
-        executor.shutdown()
+            for mesh_filepath, target_filepath, specific_args
+            in meshes_targets_and_specific_args
+        ]
+    # executor.__exit__ has already called shutdown(wait=True) here,
+    # so all futures are complete; re-raise any worker exceptions.
+    try:
+        for future in futures:
+            future.result()
+    finally:
+        if args.quiet and total_meshes > 0:
+            print()  # guarantee newline after \r progress line

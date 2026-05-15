@@ -4,20 +4,24 @@
 import argparse
 import logging
 import json
-import numpy as np
 import os
 import trimesh
 
 import deep_sdf
 import deep_sdf.workspace as ws
+from deep_sdf.metrics.chamfer import compute_chamfer
 
 
-def evaluate(experiment_directory, checkpoint, data_dir, split_filename):
+def evaluate(experiment_directory, checkpoint, data_dir, split_filename, output_filename="chamfer.csv"):
 
     with open(split_filename, "r") as f:
         split = json.load(f)
 
+    specs = deep_sdf.workspace.load_experiment_specifications(experiment_directory)
+    datasource = specs.get("DataSource", data_dir)
+
     chamfer_results = []
+    skipped = []
 
     for dataset in split:
         for class_name in split[dataset]:
@@ -34,40 +38,44 @@ def evaluate(experiment_directory, checkpoint, data_dir, split_filename):
                     'reconstructed mesh is "' + reconstructed_mesh_filename + '"'
                 )
 
-                ground_truth_samples_filename = os.path.join(
-                    data_dir,
-                    "SurfaceSamples",
+                if not os.path.exists(reconstructed_mesh_filename):
+                    logging.warning(
+                        "skipping {} — reconstruction not found: {}".format(
+                            instance_name, reconstructed_mesh_filename
+                        )
+                    )
+                    skipped.append(instance_name)
+                    continue
+
+                gt_mesh_filename = os.path.join(
+                    datasource,
                     dataset,
                     class_name,
-                    instance_name + ".ply",
+                    instance_name,
+                    "mesh.obj",
                 )
 
-                logging.debug(
-                    "ground truth samples are " + ground_truth_samples_filename
-                )
+                if not os.path.exists(gt_mesh_filename):
+                    gt_mesh_filename = os.path.join(
+                        data_dir,
+                        dataset,
+                        class_name,
+                        instance_name,
+                        "mesh.obj",
+                    )
 
-                normalization_params_filename = os.path.join(
-                    data_dir,
-                    "NormalizationParameters",
-                    dataset,
-                    class_name,
-                    instance_name + ".npz",
-                )
+                logging.debug("ground truth mesh is " + gt_mesh_filename)
 
-                logging.debug(
-                    "normalization params are " + ground_truth_samples_filename
-                )
-
-                ground_truth_points = trimesh.load(ground_truth_samples_filename)
+                gt_mesh = trimesh.load(gt_mesh_filename)
                 reconstruction = trimesh.load(reconstructed_mesh_filename)
 
-                normalization_params = np.load(normalization_params_filename)
-
-                chamfer_dist = deep_sdf.metrics.chamfer.compute_trimesh_chamfer(
-                    ground_truth_points,
+                chamfer_dist = compute_chamfer(
+                    gt_mesh,
                     reconstruction,
-                    normalization_params["offset"],
-                    normalization_params["scale"],
+                    data_dir=datasource,
+                    dataset=dataset,
+                    class_name=class_name,
+                    shape_id=instance_name,
                 )
 
                 logging.debug("chamfer distance: " + str(chamfer_dist))
@@ -76,15 +84,23 @@ def evaluate(experiment_directory, checkpoint, data_dir, split_filename):
                     (os.path.join(dataset, class_name, instance_name), chamfer_dist)
                 )
 
+    eval_dir = ws.get_evaluation_dir(experiment_directory, checkpoint, True)
     with open(
-        os.path.join(
-            ws.get_evaluation_dir(experiment_directory, checkpoint, True), "chamfer.csv"
-        ),
+        os.path.join(eval_dir, output_filename),
         "w",
     ) as f:
-        f.write("shape, chamfer_dist\n")
+        f.write("shape,chamfer_dist\n")
         for result in chamfer_results:
-            f.write("{}, {}\n".format(result[0], result[1]))
+            f.write("{},{}\n".format(result[0], result[1]))
+
+    if skipped:
+        logging.warning(
+            "Skipped {}/{} shapes (no reconstruction found)".format(
+                len(skipped), len(skipped) + len(chamfer_results)
+            )
+        )
+
+    return chamfer_results, skipped
 
 
 if __name__ == "__main__":
@@ -119,6 +135,13 @@ if __name__ == "__main__":
         required=True,
         help="The split to evaluate.",
     )
+    arg_parser.add_argument(
+        "--output",
+        "-o",
+        dest="output_filename",
+        default="chamfer.csv",
+        help="Output CSV filename (default: chamfer.csv). Use 'chamfer_all.csv' for full dataset evaluation.",
+    )
 
     deep_sdf.add_common_args(arg_parser)
 
@@ -131,4 +154,5 @@ if __name__ == "__main__":
         args.checkpoint,
         args.data_source,
         args.split_filename,
+        args.output_filename,
     )
